@@ -189,6 +189,17 @@ jobs:
         [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
+
+    - name: Bark notify
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建完成/ESXi%20VMDK已生成?group=ImmortalWrt-Actions"
+        else
+          curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建失败/请检查Actions日志?group=ImmortalWrt-Actions"
+        fi
+
+
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
       if: steps.tag.outputs.status == 'success' && !cancelled()
@@ -213,3 +224,5 @@ jobs:
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
