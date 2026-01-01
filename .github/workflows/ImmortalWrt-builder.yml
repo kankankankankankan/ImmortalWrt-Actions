@@ -230,7 +230,7 @@ jobs:
         coscli cp ${{ env.FIRMWARE }}/ cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/ --recursive \
           -i "${{ secrets.COS_SECRET_ID }}" \
           -k "${{ secrets.COS_SECRET_KEY }}" \
-          -e "cos.ap-shanghai.myqcloud.com"
+          -e "cos.accelerate.myqcloud.com"
 
     - name: Bark notify
       if: always()
