@@ -172,7 +172,6 @@ jobs:
         echo "=== Final firmware files ==="
         ls -lh
 
-
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
@@ -189,15 +188,29 @@ jobs:
         [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
+    - name: Cleanup firmware files
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd ${{ env.FIRMWARE }}
+        ls | grep -Ev '(squashfs-combined-efi\.img\.gz|squashfs-combined\.img\.gz|config\.buildinfo|esxi\.vmdk\.zip)' | xargs -r rm -f
+        echo "=== Final firmware files ==="
+        ls -lh
+
+    - name: Upload firmware to Tencent COS
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      run: |
+        cd ${{ env.FIRMWARE }}
+        coscli cp . cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/ --recursive \
+          -i "${{ secrets.COS_SECRET_ID }}" \
+          -k "${{ secrets.COS_SECRET_KEY }}" \
+          -e "cos.ap-shanghai.myqcloud.com"
 
     - name: Bark notify
       if: always()
       run: |
-        if [ "${{ job.status }}" == "success" ]; then
-          curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建完成/ESXi%20VMDK已生成?group=ImmortalWrt-Actions"
-        else
-          curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建失败/请检查Actions日志?group=ImmortalWrt-Actions"
-        fi
+        STATUS="成功"
+        if [ "${{ job.status }}" != "success" ]; then STATUS="失败"; fi
+        curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建${STATUS}/ESXi%20VMDK已生成?group=ImmortalWrt-Actions"
 
 
     - name: Upload firmware to release
