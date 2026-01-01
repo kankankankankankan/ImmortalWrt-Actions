@@ -11,7 +11,7 @@ mkdir -p files/etc/uci-defaults
 # 2️⃣ 下载 FakeHTTP 二进制并放入固件
 # ==========================
 echo "Downloading FakeHTTP binary..."
-curl -L https://gh.xrgzs.top/https://github.com/MikeWang000000/FakeHTTP/releases/latest/download/fakehttp-linux-x86_64.tar.gz -o fakehttp.tar.gz
+curl -L https://github.com/MikeWang000000/FakeHTTP/releases/latest/download/fakehttp-linux-x86_64.tar.gz -o fakehttp.tar.gz
 
 echo "Extracting FakeHTTP..."
 tar xzvf fakehttp.tar.gz
