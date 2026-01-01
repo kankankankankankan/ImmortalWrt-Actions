@@ -130,25 +130,38 @@ jobs:
       run: |
         cd immortalwrt/bin/targets/*/*
         
-        # 查找 EFI 镜像
+        # 1. 查找 EFI 镜像
         IMG_GZ=$(ls *squashfs*combined-efi*.img.gz 2>/dev/null | head -n 1)
         [ -z "$IMG_GZ" ] && echo "EFI combined image not found" && exit 1
 
-        gunzip -f "$IMG_GZ"
+        # 2. 解压镜像
+        # 关键修改：使用 gzip -d -k (keep) 保留源文件，这样上传时 EFI 固件还在
+        # 加上 || true 忽略解压时的警告，防止脚本中断
+        echo "Decompressing $IMG_GZ ..."
+        gzip -d -k "$IMG_GZ" || true
+
         IMG="${IMG_GZ%.gz}"
+        
+        # 检查解压是否真的成功（文件是否存在）
+        if [ ! -f "$IMG" ]; then
+          echo "ERROR: Decompression failed."
+          exit 1
+        fi
         
         VMDK_NAME="${IMG%.img}-esxi.vmdk"
         FLAT_VMDK="${VMDK_NAME%.vmdk}-flat.vmdk"
 
-        # 关键修改：指定 subformat=monolithicFlat 才会生成 -flat.vmdk
+        # 3. 转换为 VMDK (monolithicFlat)
+        echo "Converting to ESXi VMDK..."
         qemu-img convert -f raw -O vmdk -o subformat=monolithicFlat "$IMG" "$VMDK_NAME"
         
-        # 修正文件名及强校验
+        # 4. 修正 flat 文件名 (强校验)
         if [ ! -f "$FLAT_VMDK" ]; then
            echo "Warning: Flat file not found by expected name, checking directory..."
-           ls -lh
+           ls -lh *.vmdk
+           # 尝试找最大的 vmdk 文件
            REAL_FLAT=$(find . -name "*.vmdk" -type f -size +100M | head -n 1)
-           if [ -n "$REAL_FLAT" ]; then
+           if [ -n "$REAL_FLAT" ] && [ "$REAL_FLAT" != "./$VMDK_NAME" ]; then
               mv "$REAL_FLAT" "$FLAT_VMDK"
            else
               echo "ERROR: ESXi flat vmdk generation failed"
@@ -156,7 +169,10 @@ jobs:
            fi
         fi
 
+        # 5. 打包 VMDK
         zip -r "${VMDK_NAME}.zip" "$VMDK_NAME" "$FLAT_VMDK"
+        
+        # 6. 清理中间文件 (保留原始 .img.gz 用于上传)
         rm -f "$IMG" "$VMDK_NAME" "$FLAT_VMDK"
 
     - name: Cleanup firmware files
@@ -210,8 +226,8 @@ jobs:
     - name: Upload firmware to Tencent COS
       if: steps.organize.outputs.status == 'success' && !cancelled()
       run: |
-        cd ${{ env.FIRMWARE }}
-        coscli cp . cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/ --recursive \
+        # 修复：不进入目录，直接指定路径上传，避免 coscli_output 文件夹冲突
+        coscli cp ${{ env.FIRMWARE }}/ cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/ --recursive \
           -i "${{ secrets.COS_SECRET_ID }}" \
           -k "${{ secrets.COS_SECRET_KEY }}" \
           -e "cos.ap-shanghai.myqcloud.com"
