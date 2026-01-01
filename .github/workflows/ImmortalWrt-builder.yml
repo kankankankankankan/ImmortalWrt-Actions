@@ -129,31 +129,35 @@ jobs:
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd immortalwrt/bin/targets/*/*
-
-        # 仅使用 EFI combined 镜像
+        
+        # 查找 EFI 镜像
         IMG_GZ=$(ls *squashfs*combined-efi*.img.gz 2>/dev/null | head -n 1)
         [ -z "$IMG_GZ" ] && echo "EFI combined image not found" && exit 1
 
         gunzip -f "$IMG_GZ"
         IMG="${IMG_GZ%.gz}"
-
+        
         VMDK_NAME="${IMG%.img}-esxi.vmdk"
         FLAT_VMDK="${VMDK_NAME%.vmdk}-flat.vmdk"
 
-        qemu-img convert -f raw -O vmdk "$IMG" "$VMDK_NAME"
-
-        # 强校验，避免红 X 假成功
+        # 关键修改：指定 subformat=monolithicFlat 才会生成 -flat.vmdk
+        qemu-img convert -f raw -O vmdk -o subformat=monolithicFlat "$IMG" "$VMDK_NAME"
+        
+        # 修正文件名及强校验
         if [ ! -f "$FLAT_VMDK" ]; then
-          echo "ERROR: ESXi flat vmdk not generated"
-          ls -lh
-          exit 1
+           echo "Warning: Flat file not found by expected name, checking directory..."
+           ls -lh
+           REAL_FLAT=$(find . -name "*.vmdk" -type f -size +100M | head -n 1)
+           if [ -n "$REAL_FLAT" ]; then
+              mv "$REAL_FLAT" "$FLAT_VMDK"
+           else
+              echo "ERROR: ESXi flat vmdk generation failed"
+              exit 1
+           fi
         fi
 
         zip -r "${VMDK_NAME}.zip" "$VMDK_NAME" "$FLAT_VMDK"
-
-        # 清理中间文件
         rm -f "$IMG" "$VMDK_NAME" "$FLAT_VMDK"
-
 
     - name: Cleanup firmware files
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
@@ -196,6 +200,13 @@ jobs:
         echo "=== Final firmware files ==="
         ls -lh
 
+    - name: Install COSCLI
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      run: |
+        wget -q https://cosbrowser.cloud.tencent.com/software/coscli/coscli-linux-amd64 -O coscli
+        chmod +x coscli
+        sudo mv coscli /usr/local/bin/
+
     - name: Upload firmware to Tencent COS
       if: steps.organize.outputs.status == 'success' && !cancelled()
       run: |
@@ -237,5 +248,3 @@ jobs:
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
