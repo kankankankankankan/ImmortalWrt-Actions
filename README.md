@@ -5,6 +5,10 @@
 - 增加FakeHTTP功能，具体实现功能可以进入[FakeHTTP](https://github.com/MikeWang000000/FakeHTTP)进行查看，建议安装完成后修改/etc/init.d/fakehttp 文件，将里面bili的域名进行修改，获取对应加速域名的插件为[Custom CDN of Bilibili](https://greasyfork.org/zh-CN/scripts/527498-custom-cdn-of-bilibili-ccb-%E4%BF%AE%E6%94%B9%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9%E7%9A%84%E8%A7%86%E9%A2%91%E6%92%AD%E6%94%BE%E6%BA%90)安装到浏览器，可以选定你所在区域获取并配置！
 - 增加国内COS存储桶支持,配置方法进入Settings -> Secrets and variables -> Actions 增加环境变量COS_SECRET_ID及COS_SECRET_KEY完成！
 
+## 懒人大法
+- 下载区域找对自己的固件 (后缀img.gz普通模式、*efi.img.gz匹配的UEFI启动模式、efi-esxi.vmdk.zip支持ESXi导入vmdk镜像)
+- 完成安装后 vi /etc/config/network 修改网卡IP地址即可！
+
 ## 使用
 
 - Fork 这个仓库
