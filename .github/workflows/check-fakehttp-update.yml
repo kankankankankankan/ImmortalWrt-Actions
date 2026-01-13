@@ -1,0 +1,129 @@
+#
+# 监控 FakeHTTP 上游 Release 更新并自动触发固件编译
+# 
+# 使用方法：
+# 1. 将此文件放入仓库的 .github/workflows/ 目录
+# 2. 确保仓库中有 .fakehttp_version 文件用于存储已知版本（首次运行会自动创建）
+# 3. 确保 GITHUB_TOKEN 有写入权限（Settings -> Actions -> General -> Workflow permissions）
+#
+
+name: Check FakeHTTP Update
+
+on:
+  # 定时检查：每6小时检查一次
+  schedule:
+    - cron: '0 0 */2 * *'
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制触发编译（忽略版本检查）'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  UPSTREAM_REPO: MikeWang000000/FakeHTTP
+  VERSION_FILE: .fakehttp_version
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    outputs:
+      has_update: ${{ steps.check.outputs.has_update }}
+      latest_version: ${{ steps.check.outputs.latest_version }}
+      release_notes: ${{ steps.check.outputs.release_notes }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check FakeHTTP latest release
+        id: check
+        run: |
+          echo "📡 检查 FakeHTTP 上游 Release..."
+          
+          # 获取最新 release 信息
+          RELEASE_INFO=$(curl -s "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest")
+          
+          # 提取版本号（tag_name）
+          LATEST_VERSION=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+          RELEASE_URL=$(echo "$RELEASE_INFO" | jq -r '.html_url')
+          RELEASE_NOTES=$(echo "$RELEASE_INFO" | jq -r '.body' | head -c 500)
+          PUBLISHED_AT=$(echo "$RELEASE_INFO" | jq -r '.published_at')
+          
+          echo "🏷️ 最新版本: $LATEST_VERSION"
+          echo "📅 发布时间: $PUBLISHED_AT"
+          echo "🔗 发布链接: $RELEASE_URL"
+          
+          # 检查版本号是否有效
+          if [ "$LATEST_VERSION" = "null" ] || [ -z "$LATEST_VERSION" ]; then
+            echo "❌ 无法获取 FakeHTTP 最新版本信息"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # 读取已知版本
+          if [ -f "${{ env.VERSION_FILE }}" ]; then
+            KNOWN_VERSION=$(cat "${{ env.VERSION_FILE }}")
+            echo "📋 已知版本: $KNOWN_VERSION"
+          else
+            KNOWN_VERSION=""
+            echo "📋 首次运行，无已知版本记录"
+          fi
+          
+          # 判断是否有更新
+          if [ "${{ github.event.inputs.force_build }}" = "true" ]; then
+            echo "🔧 强制编译模式"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+          elif [ "$LATEST_VERSION" != "$KNOWN_VERSION" ]; then
+            echo "✅ 检测到新版本！"
+            echo "has_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ 当前已是最新版本，无需更新"
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # 输出版本信息
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          
+          # 处理 release notes（转义换行符）
+          RELEASE_NOTES_ESCAPED=$(echo "$RELEASE_NOTES" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
+          echo "release_notes=$RELEASE_NOTES_ESCAPED" >> $GITHUB_OUTPUT
+
+      - name: Update version file
+        if: steps.check.outputs.has_update == 'true'
+        run: |
+          echo "${{ steps.check.outputs.latest_version }}" > ${{ env.VERSION_FILE }}
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ${{ env.VERSION_FILE }}
+          git diff --staged --quiet || git commit -m "chore: update FakeHTTP version to ${{ steps.check.outputs.latest_version }}"
+          git push || echo "Push failed, may be no changes or permission issue"
+
+  trigger-build:
+    needs: check-update
+    if: needs.check-update.outputs.has_update == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger ImmortalWrt Build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          event-type: fakehttp-update
+          client-payload: |
+            {
+              "fakehttp_version": "${{ needs.check-update.outputs.latest_version }}",
+              "trigger": "auto-update"
+            }
+
+      - name: Summary
+        run: |
+          echo "## 🚀 FakeHTTP 更新检测" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**新版本**: ${{ needs.check-update.outputs.latest_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "已触发固件编译工作流！" >> $GITHUB_STEP_SUMMARY

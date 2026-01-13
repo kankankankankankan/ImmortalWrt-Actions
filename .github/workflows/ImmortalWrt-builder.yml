@@ -1,9 +1,13 @@
 # 代码
 name: ImmortalWrt Builder
 
+
 on:
+
   repository_dispatch:
+    types: [fakehttp-update]
   workflow_dispatch:
+
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
