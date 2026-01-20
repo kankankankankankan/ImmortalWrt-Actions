@@ -23,7 +23,7 @@ on:
         type: boolean
 
 env:
-  UPSTREAM_REPO: MikeWang000000/FakeHTTP
+  UPSTREAM_REPO: a315344690/FakeHTTP
   VERSION_FILE: .fakehttp_version
 
 jobs:
