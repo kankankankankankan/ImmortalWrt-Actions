@@ -55,6 +55,7 @@
 ## 致谢
 
 - [ImmortalWrt-Actions by whiskyrye](https://github.com/whiskyrye/ImmortalWrt-Actions)
+- [FakeHTTP](https://github.com/MikeWang000000/FakeHTTP)
 - [Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt)
 - [Microsoft Azure](https://azure.microsoft.com)
 - [GitHub Actions](https://github.com/features/actions)
