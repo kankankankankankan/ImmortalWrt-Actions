@@ -30,7 +30,7 @@ STOP=01
 
 start_service() {
     procd_open_instance
-    procd_set_param command fakehttp -d -a -e creator.douyin.com -e vd3.bdstatic.com -e p3-pc-sign.douyinpic.com -e i0.hdslb.com -e cn-sxxa-cm-01-12.bilivideo.com -e cn-sxxa-cm-01-04.bilivideo.com -e cn-sxxa-ct-03-03.bilivideo.com -e cn-sxxa-cu-02-01.bilivideo.com -e www.speedtest.cn -e pan.quark.cn -e www.123pan.com -e onedrive.live.com -e www.alipan.com -e dlcv2.cnspeedtest.cn -e yun.139.com -e ykj-eos-wx2-01.eos-wuxi-3.cmecloud.cn -e test.ustc.edu.cn -h yun.139.com -e ykj-eos-dg5-01.eos-dongguan-6.cmec
+    procd_set_param command fakehttp -d -a -e creator.douyin.com -e vd3.bdstatic.com -e p3-pc-sign.douyinpic.com -e i0.hdslb.com -e cn-sxxa-cm-01-12.bilivideo.com -e cn-sxxa-cm-01-04.bilivideo.com -e cn-sxxa-ct-03-03.bilivideo.com -e cn-sxxa-cu-02-01.bilivideo.com -e www.speedtest.cn -e pan.quark.cn -e www.123pan.com -e onedrive.live.com -e www.alipan.com -e dlcv2.cnspeedtest.cn -e yun.139.com -e ykj-eos-wx2-01.eos-wuxi-3.cmecloud.cn -e test.ustc.edu.cn -h yun.139.com -h d1-ant.baidu.com -h pan.baidu.com -e ykj-eos-dg5-01.eos-dongguan-6.cmec
     procd_close_instance
 }
 
