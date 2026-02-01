@@ -23,7 +23,13 @@ fi
 rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
 
-for EXPERIMENT in greenteagc runtimefreegc simd; do
+# 关键修复：清空构建系统注入的 GOEXPERIMENT，避免 go 报 unknown GOEXPERIMENT
+if [ -f "include/golang-package.mk" ]; then
+  echo "Patch: clear GOEXPERIMENT in include/golang-package.mk"
+  sed -i -E 's/^GOEXPERIMENT[[:space:]]*([:?]?=).*/GOEXPERIMENT:=/g' include/golang-package.mk
+fi
+
+for EXPERIMENT in greenteagc runtimefreegc; do
   FILES="$(grep -RIl "$EXPERIMENT" package/dae 2>/dev/null || true)"
   if [ -n "$FILES" ]; then
     echo "Patch: remove GOEXPERIMENT $EXPERIMENT"
