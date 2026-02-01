@@ -1,6 +1,34 @@
 #!/bin/bash
+set -e
 
-# ==== FakeHTTP 二进制下载 + 安装到固件 ====
+# 确认在 ImmortalWrt 或 OpenWrt 源码根目录执行
+if [ ! -d "package" ] || [ ! -f "include/target.mk" ]; then
+  echo "Error: please run this script in OpenWrt or ImmortalWrt source root."
+  exit 1
+fi
+
+# =========================================================
+# luci-app-daed 源码集成
+# 目标结果
+# 1. 在 package/dae 出现 luci-app-daed 源码
+# 2. 后续 make defconfig 与 make 编译时可选中并打包进固件
+# =========================================================
+if [ ! -d "package/dae" ]; then
+  git clone --depth=1 https://github.com/QiuSimons/luci-app-daed package/dae
+else
+  echo "package/dae already exists, skip clone."
+fi
+
+# =========================================================
+# FakeHTTP 二进制下载 + 安装到固件
+# 目标结果
+# 1. 固件内包含 /usr/bin/fakehttp
+# 2. 包含 /etc/init.d/fakehttp
+# 3. 首次启动自动 enable
+# 注意
+# 这里会下载第三方二进制并打包进固件
+# 如果你希望我帮你加版本固定与 sha256 校验的安全写法，请回复同意
+# =========================================================
 
 # 1️⃣ 创建文件目录
 mkdir -p files/usr/bin
