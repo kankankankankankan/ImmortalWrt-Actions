@@ -19,6 +19,9 @@ else
   echo "package/dae already exists, skip clone."
 fi
 
+rm -rf feeds/packages/net/daed
+rm -rf package/feeds/packages/daed
+
 # =========================================================
 # FakeHTTP 二进制下载 + 安装到固件
 # 目标结果
