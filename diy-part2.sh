@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 # 确认在 ImmortalWrt 或 OpenWrt 源码根目录执行
 if [ ! -d "package" ] || [ ! -f "include/target.mk" ]; then
@@ -21,6 +22,17 @@ fi
 
 rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
+
+# 兼容 go1.23，移除 greenteagc
+FILES="$(grep -RIl "greenteagc" package/dae 2>/dev/null || true)"
+if [ -n "$FILES" ]; then
+  echo "Patch: remove GOEXPERIMENT greenteagc for go1.23 toolchain"
+  echo "$FILES"
+  echo "$FILES" | xargs -r sed -i \
+    -e 's/greenteagc,//g' \
+    -e 's/,greenteagc//g' \
+    -e 's/greenteagc//g'
+fi
 
 # =========================================================
 # FakeHTTP 二进制下载 + 安装到固件
