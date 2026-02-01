@@ -23,16 +23,17 @@ fi
 rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
 
-# 兼容 go1.23，移除 greenteagc
-FILES="$(grep -RIl "greenteagc" package/dae 2>/dev/null || true)"
-if [ -n "$FILES" ]; then
-  echo "Patch: remove GOEXPERIMENT greenteagc for go1.23 toolchain"
-  echo "$FILES"
-  echo "$FILES" | xargs -r sed -i \
-    -e 's/greenteagc,//g' \
-    -e 's/,greenteagc//g' \
-    -e 's/greenteagc//g'
-fi
+for EXPERIMENT in greenteagc runtimefreegc simd; do
+  FILES="$(grep -RIl "$EXPERIMENT" package/dae 2>/dev/null || true)"
+  if [ -n "$FILES" ]; then
+    echo "Patch: remove GOEXPERIMENT $EXPERIMENT"
+    echo "$FILES"
+    echo "$FILES" | xargs -r sed -i \
+      -e "s/${EXPERIMENT},//g" \
+      -e "s/,${EXPERIMENT}//g" \
+      -e "s/${EXPERIMENT}//g"
+  fi
+done
 
 # =========================================================
 # FakeHTTP 二进制下载 + 安装到固件
