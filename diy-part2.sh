@@ -24,9 +24,11 @@ rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
 
 # 关键修复：清空构建系统注入的 GOEXPERIMENT，避免 go 报 unknown GOEXPERIMENT
-if [ -f "include/golang-package.mk" ]; then
-  echo "Patch: clear GOEXPERIMENT in include/golang-package.mk"
-  sed -i -E 's/^GOEXPERIMENT[[:space:]]*([:?]?=).*/GOEXPERIMENT:=/g' include/golang-package.mk
+if [ -f "feeds/packages/lang/golang/golang-build.sh" ]; then
+  if grep -q "GOEXPERIMENT" feeds/packages/lang/golang/golang-build.sh; then
+    echo "Patch: force GOEXPERIMENT=none in golang-build.sh"
+    sed -i -E 's/(GOEXPERIMENT=)[^[:space:]]+/\1none/g' feeds/packages/lang/golang/golang-build.sh
+  fi
 fi
 
 for EXPERIMENT in greenteagc runtimefreegc; do
