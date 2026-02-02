@@ -2,46 +2,75 @@
 set -e
 set -o pipefail
 
-# 确认在 ImmortalWrt 或 OpenWrt 源码根目录执行
+# 需在 ImmortalWrt 或 OpenWrt 源码根目录执行
 if [ ! -d "package" ] || [ ! -f "include/target.mk" ]; then
   echo "Error: please run this script in OpenWrt or ImmortalWrt source root."
   exit 1
 fi
 
-# =========================================================
-# luci-app-daed 源码集成
-# 目标结果
-# 1. 在 package/dae 出现 luci-app-daed 源码
-# 2. 后续 make defconfig 与 make 编译时可选中并打包进固件
-# =========================================================
+echo "[1/6] Prepare luci-app-daed source"
 if [ ! -d "package/dae" ]; then
   git clone --depth=1 https://github.com/QiuSimons/luci-app-daed package/dae
 else
   echo "package/dae already exists, skip clone."
 fi
 
+# 避免与 feeds 里的 daed 冲突
 rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
 
-# 关键修复：清空构建系统注入的 GOEXPERIMENT，避免 go 报 unknown GOEXPERIMENT
+echo "[2/6] Sanitize GOEXPERIMENT in build system (include/ + feeds/)"
+PATCH_ROOTS="include feeds"
+
+# A. 移除已知会触发 unknown GOEXPERIMENT 的实验项
+BAD_EXPS="greenteagc runtimefreegc simd"
+for exp in $BAD_EXPS; do
+  FILES="$(grep -RIl --binary-files=without-match "$exp" $PATCH_ROOTS 2>/dev/null || true)"
+  if [ -n "$FILES" ]; then
+    echo "Patch: remove token '${exp}' from:"
+    echo "$FILES"
+    echo "$FILES" | xargs -r sed -i \
+      -e "s/${exp},//g" \
+      -e "s/,${exp}//g" \
+      -e "s/${exp}//g"
+  fi
+done
+
+# B. 清空 include/ 与 feeds/ 内对 GOEXPERIMENT 的赋值，防止再次注入未知项
+ASSIGN_FILES="$(grep -RIl --binary-files=without-match -E '^(export[[:space:]]+)?GOEXPERIMENT[:?]?=' $PATCH_ROOTS 2>/dev/null || true)"
+if [ -n "$ASSIGN_FILES" ]; then
+  echo "Patch: clear GOEXPERIMENT assignment in:"
+  echo "$ASSIGN_FILES"
+  echo "$ASSIGN_FILES" | xargs -r sed -i -E \
+    -e 's/^(export[[:space:]]+)?GOEXPERIMENT([:?]?=).*/GOEXPERIMENT\2/'
+fi
+
+# C. 兜底处理 golang-build.sh 中可能传入的 GOEXPERIMENT
+# 将形如 GOEXPERIMENT=xxx 的片段改为空
 if [ -f "feeds/packages/lang/golang/golang-build.sh" ]; then
-  if grep -q "GOEXPERIMENT" feeds/packages/lang/golang/golang-build.sh; then
-    echo "Patch: force GOEXPERIMENT=none in golang-build.sh"
-    sed -i -E 's/(GOEXPERIMENT=)[^[:space:]]+/\1none/g' feeds/packages/lang/golang/golang-build.sh
+  if grep -q "GOEXPERIMENT=" feeds/packages/lang/golang/golang-build.sh; then
+    echo "Patch: clear inline GOEXPERIMENT=... in feeds/packages/lang/golang/golang-build.sh"
+    sed -i -E 's/GOEXPERIMENT=[^[:space:]]+/GOEXPERIMENT=/g' feeds/packages/lang/golang/golang-build.sh
   fi
 fi
 
-for EXPERIMENT in greenteagc runtimefreegc; do
-  FILES="$(grep -RIl "$EXPERIMENT" package/dae 2>/dev/null || true)"
+echo "[3/6] Sanitize GOEXPERIMENT tokens inside package/dae (third party)"
+for exp in $BAD_EXPS; do
+  FILES="$(grep -RIl --binary-files=without-match "$exp" package/dae 2>/dev/null || true)"
   if [ -n "$FILES" ]; then
-    echo "Patch: remove GOEXPERIMENT $EXPERIMENT"
+    echo "Patch: remove token '${exp}' from:"
     echo "$FILES"
     echo "$FILES" | xargs -r sed -i \
-      -e "s/${EXPERIMENT},//g" \
-      -e "s/,${EXPERIMENT}//g" \
-      -e "s/${EXPERIMENT}//g"
+      -e "s/${exp},//g" \
+      -e "s/,${exp}//g" \
+      -e "s/${exp}//g"
   fi
 done
+
+echo "[4/6] Clean daed build artifacts (reduce cache interference)"
+make package/dae/daed/clean V=s >/dev/null 2>&1 || true
+rm -rf build_dir/target-*/daed-* 2>/dev/null || true
+rm -rf tmp/go-build 2>/dev/null || true
 
 # =========================================================
 # FakeHTTP 二进制下载 + 安装到固件
