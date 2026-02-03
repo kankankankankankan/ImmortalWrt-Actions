@@ -8,7 +8,7 @@ if [ ! -d "package" ] || [ ! -f "include/target.mk" ]; then
   exit 1
 fi
 
-echo "[1/6] Prepare luci-app-daed source"
+echo "[1/7] Prepare luci-app-daed source"
 if [ ! -d "package/dae" ]; then
   git clone --depth=1 https://github.com/QiuSimons/luci-app-daed package/dae
 else
@@ -19,7 +19,7 @@ fi
 rm -rf feeds/packages/net/daed
 rm -rf package/feeds/packages/daed
 
-echo "[2/6] Sanitize GOEXPERIMENT in build system (include/ + feeds/)"
+echo "[2/7] Sanitize GOEXPERIMENT in build system (include/ + feeds/)"
 PATCH_ROOTS="include feeds"
 
 # A. 移除已知会触发 unknown GOEXPERIMENT 的实验项
@@ -36,7 +36,6 @@ for exp in $BAD_EXPS; do
   fi
 done
 
-# B. 清空 include/ 与 feeds/ 内对 GOEXPERIMENT 的赋值，防止再次注入未知项
 ASSIGN_FILES="$(grep -RIl --binary-files=without-match -E '^(export[[:space:]]+)?GOEXPERIMENT[:?]?=' $PATCH_ROOTS 2>/dev/null || true)"
 if [ -n "$ASSIGN_FILES" ]; then
   echo "Patch: clear GOEXPERIMENT assignment in:"
@@ -45,8 +44,6 @@ if [ -n "$ASSIGN_FILES" ]; then
     -e 's/^(export[[:space:]]+)?GOEXPERIMENT([:?]?=).*/GOEXPERIMENT\2/'
 fi
 
-# C. 兜底处理 golang-build.sh 中可能传入的 GOEXPERIMENT
-# 将形如 GOEXPERIMENT=xxx 的片段改为空
 if [ -f "feeds/packages/lang/golang/golang-build.sh" ]; then
   if grep -q "GOEXPERIMENT=" feeds/packages/lang/golang/golang-build.sh; then
     echo "Patch: clear inline GOEXPERIMENT=... in feeds/packages/lang/golang/golang-build.sh"
@@ -54,7 +51,7 @@ if [ -f "feeds/packages/lang/golang/golang-build.sh" ]; then
   fi
 fi
 
-echo "[3/6] Sanitize GOEXPERIMENT tokens inside package/dae (third party)"
+echo "[3/7] Sanitize GOEXPERIMENT tokens inside package/dae (third party)"
 for exp in $BAD_EXPS; do
   FILES="$(grep -RIl --binary-files=without-match "$exp" package/dae 2>/dev/null || true)"
   if [ -n "$FILES" ]; then
@@ -67,10 +64,27 @@ for exp in $BAD_EXPS; do
   fi
 done
 
-echo "[4/6] Clean daed build artifacts (reduce cache interference)"
+echo "[4/7] Fix geodata dependencies (daed-geoip -> v2ray-geoip)"
+# luci-app-daed 依赖 daed-geoip/daed-geosite，但 ImmortalWrt 里叫 v2ray-geoip/v2ray-geosite
+find package/dae -type f \( -name "Makefile" -o -name "*.mk" \) -exec sed -i \
+  -e 's/daed-geoip/v2ray-geoip/g' \
+  -e 's/daed-geosite/v2ray-geosite/g' {} \;
+
+echo "Geodata dependencies after patch:"
+grep -r "geoip\|geosite" package/dae --include="Makefile" | head -10 || echo "No geodata deps found"
+
+echo "[5/7] Clean daed build artifacts (reduce cache interference)"
 make package/dae/daed/clean V=s >/dev/null 2>&1 || true
 rm -rf build_dir/target-*/daed-* 2>/dev/null || true
 rm -rf tmp/go-build 2>/dev/null || true
+
+echo "[6/7] Verify patches applied"
+echo "--- GOEXPERIMENT in package/dae ---"
+grep -r "GOEXPERIMENT" package/dae --include="Makefile" | head -5 || echo "None"
+echo "--- GOEXPERIMENT in feeds ---"
+grep -r "GOEXPERIMENT" feeds/packages/lang/golang --include="*.mk" | head -5 || echo "None"
+
+echo "[7/7] daed patches complete"
 
 # =========================================================
 # FakeHTTP 二进制下载 + 安装到固件
@@ -78,9 +92,6 @@ rm -rf tmp/go-build 2>/dev/null || true
 # 1. 固件内包含 /usr/bin/fakehttp
 # 2. 包含 /etc/init.d/fakehttp
 # 3. 首次启动自动 enable
-# 注意
-# 这里会下载第三方二进制并打包进固件
-# 如果你希望我帮你加版本固定与 sha256 校验的安全写法，请回复同意
 # =========================================================
 
 # 1️⃣ 创建文件目录
@@ -138,5 +149,4 @@ exit 0
 EOF
 
 chmod +x files/etc/uci-defaults/10_fakehttp_enable
-
 echo "FakeHTTP integration done."
