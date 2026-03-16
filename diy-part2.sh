@@ -65,3 +65,6 @@ EOF
 
 chmod +x files/etc/uci-defaults/10_fakehttp_enable
 echo "FakeHTTP integration done."
+
+# 调用补充脚本
+bash "$(dirname "$0")/patch-luci-menu.sh"
