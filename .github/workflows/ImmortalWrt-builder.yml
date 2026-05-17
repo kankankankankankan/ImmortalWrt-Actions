@@ -231,8 +231,38 @@ jobs:
     - name: Upload firmware to Tencent COS
       if: steps.organize.outputs.status == 'success' && !cancelled()
       run: |
-        # 修复：不进入目录，直接指定路径上传，避免 coscli_output 文件夹冲突
-        coscli cp ${{ env.FIRMWARE }}/ cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/ --recursive \
+        set -e
+
+        DATE_TAG="$(date +"%Y%m%d%H%M")"
+        COS_UPLOAD_DIR="/tmp/cos_upload"
+
+        rm -rf "$COS_UPLOAD_DIR"
+        mkdir -p "$COS_UPLOAD_DIR"
+
+        cd "${{ env.FIRMWARE }}"
+
+        for file in *; do
+          [ -f "$file" ] || continue
+
+          case "$file" in
+            *.img.gz)
+              base="${file%.img.gz}"
+              cp "$file" "$COS_UPLOAD_DIR/${base}_${DATE_TAG}.img.gz"
+              ;;
+            *.vmdk.zip)
+              base="${file%.vmdk.zip}"
+              cp "$file" "$COS_UPLOAD_DIR/${base}_${DATE_TAG}.vmdk.zip"
+              ;;
+            config.buildinfo)
+              cp "$file" "$COS_UPLOAD_DIR/config_${DATE_TAG}.buildinfo"
+              ;;
+          esac
+        done
+
+        echo "=== COS upload files ==="
+        ls -lh "$COS_UPLOAD_DIR"
+
+        coscli cp "$COS_UPLOAD_DIR/" cos://file-vemhbtkmw-1252854513/firmware/ImmortalWrt/${DATE_TAG}/ --recursive \
           -i "${{ secrets.COS_SECRET_ID }}" \
           -k "${{ secrets.COS_SECRET_KEY }}" \
           -e "cos.accelerate.myqcloud.com"
