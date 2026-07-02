@@ -131,6 +131,7 @@ jobs:
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
+        set -e
         cd immortalwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
@@ -139,6 +140,7 @@ jobs:
     - name: Convert OpenWrt image to ESXi VMDK
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
+        set -e
         cd immortalwrt/bin/targets/*/*
         
         # 1. 查找 EFI 镜像
