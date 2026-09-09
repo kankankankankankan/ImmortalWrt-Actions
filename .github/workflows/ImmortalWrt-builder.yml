@@ -325,8 +325,14 @@ jobs:
         content=$(printf '%s\n' "$FAKEHTTP_VERSION" | base64 -w 0)
         gh api "$path" -X PUT -f message="chore: record FakeHTTP $FAKEHTTP_VERSION" \
           -f content="$content" -f sha="$blob" -f branch="$DEFAULT_BRANCH" >/dev/null
-        actual=$(gh api "$path?ref=$DEFAULT_BRANCH" --jq '.content' | base64 -d)
-        [ "$actual" = "$FAKEHTTP_VERSION" ]
+        # Contents API 偶尔会在 PUT 后短暂读到旧内容；只对读回校验做短重试。
+        for i in 1 2 3 4 5; do
+          actual=$(gh api "$path?ref=$DEFAULT_BRANCH" --jq '.content' | base64 -d)
+          [ "$actual" = "$FAKEHTTP_VERSION" ] && exit 0
+          sleep 2
+        done
+        printf '%s\n' 'FakeHTTP 版本写入后读回不一致' >&2
+        exit 1
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
