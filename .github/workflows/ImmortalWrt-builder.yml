@@ -24,11 +24,17 @@ env:
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
+# 防止手动和定时同时构建；不打断已经开始的编译。
+concurrency:
+  group: immortalwrt-builder
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: write
 
     steps:
     - name: Checkout
@@ -83,6 +89,20 @@ jobs:
     - name: Install feeds
       run: cd immortalwrt && ./scripts/feeds install -a
        
+    # 版本查询留在工作流，下载脚本只负责下载、解压和生成启动文件。
+    - name: Get FakeHTTP release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        release=$(gh api repos/kankankankankankan/FakeHTTP/releases/latest)
+        tag=$(printf '%s' "$release" | jq -er '.tag_name')
+        [[ "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
+        asset=$(printf '%s' "$release" | jq -ec '[.assets[] | select(.name == "fakehttp-linux-x86_64.tar.gz" and .state == "uploaded")] | if length == 1 then .[0] else error("缺少唯一 x86_64 成品") end')
+        id=$(printf '%s' "$asset" | jq -er '.id | tostring')
+        sha=$(printf '%s' "$asset" | jq -er '.digest | select(startswith("sha256:")) | ltrimstr("sha256:")')
+        [[ "$id" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || exit 1
+        printf 'FAKEHTTP_URL=https://github.com/kankankankankankan/FakeHTTP/releases/download/%s/fakehttp-linux-x86_64.tar.gz\nFAKEHTTP_SHA256=%s\nFAKEHTTP_VERSION=%s:%s\n' "$tag" "$sha" "$id" "$sha" >> "$GITHUB_ENV"
+
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files immortalwrt/files
@@ -98,6 +118,11 @@ jobs:
         curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh
         bash add_turboacc.sh --no-sfe        
         make defconfig
+        # FakeHTTP 使用 files/ 中的静态成品，不允许 feed 包重新覆盖。
+        if grep -Eq '^CONFIG_PACKAGE_(fakehttp|luci-app-fakehttp)=y$' .config; then
+          printf '%s\n' '错误：请取消 feed 中的 FakeHTTP 核心及 LuCI' >&2
+          exit 1
+        fi
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -198,9 +223,13 @@ jobs:
         # 2) squashfs-combined.img.gz
         # 3) config.buildinfo
         # 4) *-esxi.vmdk.zip
-        ls | grep -Ev \
-          '(squashfs-combined-efi\.img\.gz|squashfs-combined\.img\.gz|config\.buildinfo|esxi\.vmdk\.zip)' \
-          | xargs -r rm -f
+        for file in *; do
+          [ -f "$file" ] || continue
+          case "$file" in
+            *squashfs-combined-efi.img.gz|*squashfs-combined.img.gz|config.buildinfo|*esxi.vmdk.zip) ;;
+            *) rm -f -- "$file" ;;
+          esac
+        done
 
         echo "=== Final firmware files ==="
         ls -lh
@@ -218,16 +247,7 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Cleanup firmware files
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        cd ${{ env.FIRMWARE }}
-        ls | grep -Ev '(squashfs-combined-efi\.img\.gz|squashfs-combined\.img\.gz|config\.buildinfo|esxi\.vmdk\.zip)' | xargs -r rm -f
-        echo "=== Final firmware files ==="
-        ls -lh
 
     - name: Install COSCLI
       if: steps.organize.outputs.status == 'success' && !cancelled()
@@ -275,23 +295,38 @@ jobs:
           -k "${{ secrets.COS_SECRET_KEY }}" \
           -e "cos.accelerate.myqcloud.com"
 
-    - name: Bark notify
-      if: always()
-      run: |
-        STATUS="成功"
-        if [ "${{ job.status }}" != "success" ]; then STATUS="失败"; fi
-        curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建${STATUS}/ESXi%20VMDK已生成?group=ImmortalWrt-Actions"
-
-
     - name: Upload firmware to release
+      id: release
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+      if: success() && steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
+
+    # 只记录真正下载且随固件发布成功的资产，不在检查更新时提前写入。
+    - name: Record successful FakeHTTP version
+      if: success() && steps.release.outcome == 'success' && github.ref_name == github.event.repository.default_branch
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        [[ "$FAKEHTTP_VERSION" =~ ^[1-9][0-9]*:[0-9a-f]{64}$ ]] || exit 1
+        path="repos/$GITHUB_REPOSITORY/contents/.fakehttp_version"
+        current=$(gh api "$path?ref=$DEFAULT_BRANCH")
+        known=$(printf '%s' "$current" | jq -er '.content' | base64 -d)
+        if [ "$known" = "$FAKEHTTP_VERSION" ]; then
+          printf '%s\n' 'FakeHTTP 版本未变化，无需重复写入'
+          exit 0
+        fi
+        blob=$(printf '%s' "$current" | jq -er '.sha')
+        content=$(printf '%s\n' "$FAKEHTTP_VERSION" | base64 -w 0)
+        gh api "$path" -X PUT -f message="chore: record FakeHTTP $FAKEHTTP_VERSION" \
+          -f content="$content" -f sha="$blob" -f branch="$DEFAULT_BRANCH" >/dev/null
+        actual=$(gh api "$path?ref=$DEFAULT_BRANCH" --jq '.content' | base64 -d)
+        [ "$actual" = "$FAKEHTTP_VERSION" ]
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
@@ -307,3 +342,10 @@ jobs:
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Bark notify
+      if: always()
+      run: |
+        STATUS="成功"
+        if [ "${{ job.status }}" != "success" ]; then STATUS="失败"; fi
+        curl -s "https://api.day.app/${{ secrets.BARK_KEY }}/ImmortalWrt构建${STATUS}/ESXi%20VMDK已生成?group=ImmortalWrt-Actions"

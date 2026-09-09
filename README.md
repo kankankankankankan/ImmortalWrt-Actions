@@ -2,7 +2,17 @@
 
 ## 新增功能
 - 增加ESXi虚拟机格式，直接导入ESXi硬盘即可，免去转换软件
-- 增加FakeHTTP功能，具体实现功能可以进入[FakeHTTP](https://github.com/MikeWang000000/FakeHTTP)进行查看，建议安装完成后修改/etc/init.d/fakehttp 文件，将里面bili的域名进行修改，获取对应加速域名的插件为[Custom CDN of Bilibili](https://greasyfork.org/zh-CN/scripts/527498-custom-cdn-of-bilibili-ccb-%E4%BF%AE%E6%94%B9%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9%E7%9A%84%E8%A7%86%E9%A2%91%E6%92%AD%E6%94%BE%E6%BA%90)安装到浏览器，可以选定你所在区域获取并配置！
+- FakeHTTP 使用 [自己的 Release 成品](https://github.com/kankankankankankan/FakeHTTP/releases)，下载静态 x86_64 程序并校验 SHA256，不安装配套 LuCI。域名只是伪装载荷，不改变访问网站的 CDN。
+
+### FakeHTTP 简单集成
+- `diy-part2.sh` 保留原 Go 处理，追加下载成品和生成启动文件；不需要额外 Python 脚本或软件包目录。
+- 自定义 `ImmortalWrt-Packages` 软件源保留；`.config` 仅取消其中的 `fakehttp` 和 `luci-app-fakehttp`，避免重复安装。
+- 沿用原来的下载、解压、init 脚本和 `uci-defaults` 自启结构；只去掉 `-d`，使用绝对路径并增加 procd 异常重启。
+- 参数和域名直接在 `/etc/init.d/fakehttp` 修改，再执行 `/etc/init.d/fakehttp restart`。本版不额外生成黑白名单或日志配置。
+- `Check FakeHTTP Update` 检查自己仓库最新正式 Release 的 x86_64 资产；`.fakehttp_version` 只在默认分支固件构建并发布成功后更新，失败仍可重试。每月奇数日北京时间 08:00 检查，也支持手动触发。
+- 版本查询和 SHA256 来自工作流，不在下载脚本内解析 API。单独运行脚本时下载最新成品；升级前自行备份修改过的启动脚本。
+- 完整固件构建及路由器运行仍需实际验证；本地下载和语法检查不等于固件编译成功。
+
 - 增加国内COS存储桶支持,配置方法进入Settings -> Secrets and variables -> Actions 增加环境变量COS_SECRET_ID及COS_SECRET_KEY完成！
 - 具备BARK推送，操作方式同上，变量名BARK_KEY,增加你的KEY即可！
 
