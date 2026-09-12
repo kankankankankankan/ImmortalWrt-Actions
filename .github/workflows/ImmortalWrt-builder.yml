@@ -88,6 +88,19 @@ jobs:
 
     - name: Install feeds
       run: cd immortalwrt && ./scripts/feeds install -a
+
+    - name: Record ImmortalWrt-Packages revision
+      id: packages_revision
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        feed_dir="$GITHUB_WORKSPACE/immortalwrt/feeds/immortalwrt"
+        [ -d "$feed_dir/.git" ] || { echo 'ImmortalWrt-Packages feed not found' >&2; exit 1; }
+        commit=$(git -C "$feed_dir" rev-parse HEAD)
+        echo "PACKAGE_FEED_DIR=$feed_dir" >> "$GITHUB_ENV"
+        echo "PACKAGE_FEED_COMMIT=$commit" >> "$GITHUB_ENV"
+        echo "Packages feed commit: $commit"
        
     # 版本查询留在工作流，下载脚本只负责下载、解压和生成启动文件。
     - name: Get FakeHTTP release
@@ -244,9 +257,56 @@ jobs:
     - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        set -euo pipefail
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
+        previous_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+        previous_commit=''
+        if [ -n "$previous_tag" ]; then
+          previous_body=$(gh release view "$previous_tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null || true)
+          previous_commit=$(printf '%s\n' "$previous_body" | sed -n 's/^Packages feed commit: `\([0-9a-f]\{40\}\)`.*/\1/p' | head -n 1)
+        fi
+        git -C "$PACKAGE_FEED_DIR" fetch --unshallow --quiet 2>/dev/null || true
+
+        {
+          echo "## 固件编译"
+          echo
+          echo "基于 ImmortalWrt ${REPO_BRANCH}，架构：x86_64。"
+          echo
+          echo "## ImmortalWrt-Packages 更新"
+          echo
+          echo "Packages feed commit: \`$PACKAGE_FEED_COMMIT\`."
+          echo
+        } > release.txt
+
+        if [ -n "$previous_commit" ] && git -C "$PACKAGE_FEED_DIR" cat-file -e "$previous_commit^{commit}" 2>/dev/null; then
+          echo "比较范围：\`$previous_commit\` → \`$PACKAGE_FEED_COMMIT\`." >> release.txt
+          echo >> release.txt
+          echo '### 更新插件' >> release.txt
+          changed_packages=$(git -C "$PACKAGE_FEED_DIR" diff --name-only "$previous_commit" "$PACKAGE_FEED_COMMIT" \
+            | awk -F/ 'NF >= 2 {print $1}' | sort -u)
+          if [ -n "$changed_packages" ]; then
+            printf '%s\n' "$changed_packages" | sed 's/^/- `/' | sed 's/$/`/' >> release.txt
+          else
+            echo '- 本次没有检测到插件目录变化。' >> release.txt
+          fi
+          echo >> release.txt
+          echo '### 修复与变更说明' >> release.txt
+          changes=$(git -C "$PACKAGE_FEED_DIR" log --no-merges --format='- %s (%h)' "$previous_commit..$PACKAGE_FEED_COMMIT")
+          if [ -n "$changes" ]; then
+            printf '%s\n' "$changes" | head -n 100 >> release.txt
+          else
+            echo '- 本次没有新的提交说明。' >> release.txt
+          fi
+          echo >> release.txt
+          echo "完整变更： https://github.com/kankankankankankan/ImmortalWrt-Packages/compare/$previous_commit...$PACKAGE_FEED_COMMIT" >> release.txt
+        else
+          echo '这是首次记录 Packages feed 版本，后续 Release 将生成增量更新说明。' >> release.txt
+          echo >> release.txt
+          echo "本次提交： https://github.com/kankankankankankan/ImmortalWrt-Packages/commit/$PACKAGE_FEED_COMMIT" >> release.txt
+        fi
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Install COSCLI
