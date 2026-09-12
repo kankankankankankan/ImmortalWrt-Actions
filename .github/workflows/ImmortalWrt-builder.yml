@@ -19,7 +19,6 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
@@ -32,9 +31,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      actions: write
 
     steps:
     - name: Checkout
@@ -83,16 +79,13 @@ jobs:
         cd immortalwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
                     
-    - name: Update feeds
-      run: cd immortalwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd immortalwrt && ./scripts/feeds install -a
+    - name: Update and install feeds
+      run: |
+        cd immortalwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: Record ImmortalWrt-Packages revision
-      id: packages_revision
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
         feed_dir="$GITHUB_WORKSPACE/immortalwrt/feeds/immortalwrt"
@@ -124,8 +117,28 @@ jobs:
         cd immortalwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    - name: Write build marker
+      run: |
+        set -e
+        BUILD_TAG="$(date +"%Y.%m.%d-%H%M")"
+        BUILD_TIME="$(date +"%Y-%m-%d %H:%M:%S %Z")"
+        SHORT_SHA="${GITHUB_SHA::7}"
+        echo "BUILD_TAG=$BUILD_TAG" >> "$GITHUB_ENV"
+
+        mkdir -p immortalwrt/files/etc
+        cat > immortalwrt/files/etc/kankan_build_info <<EOF
+        Build Tag: $BUILD_TAG
+        Build Time: $BUILD_TIME
+        Git Commit: $GITHUB_SHA
+        Git Short Commit: $SHORT_SHA
+        GitHub Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+        Source Repo: $REPO_URL
+        Source Branch: $REPO_BRANCH
+        FakeHTTP Version: ${FAKEHTTP_VERSION:-unknown}
+        FakeHTTP SHA256: ${FAKEHTTP_SHA256:-unknown}
+        EOF
+
     - name: Download package
-      id: package
       run: |
         cd immortalwrt
         curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh
@@ -153,17 +166,6 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Check space usage
-      if: steps.compile.outputs.status == 'success'
-      run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: immortalwrt/bin
 
     - name: Organize files
       id: organize
@@ -261,7 +263,8 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        RELEASE_TAG="${BUILD_TAG:-$(date +"%Y.%m.%d-%H%M")}"
+        echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
         previous_tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
         previous_commit=''
         if [ -n "$previous_tag" ]; then
@@ -272,6 +275,8 @@ jobs:
 
         {
           echo "## 固件编译"
+          echo
+          echo "构建标识：\`$RELEASE_TAG\`。"
           echo
           echo "基于 ImmortalWrt ${REPO_BRANCH}，架构：x86_64。"
           echo
