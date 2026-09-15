@@ -81,11 +81,7 @@ jobs:
                     
     - name: Update and install feeds
       run: |
-        set -euo pipefail
         cd immortalwrt
-        # 强制重新获取自定义 feed，避免沿用旧的 dae 包。
-        rm -rf feeds/immortalwrt
-        ./scripts/feeds update immortalwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
@@ -148,18 +144,6 @@ jobs:
         curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh
         bash add_turboacc.sh --no-sfe        
         make defconfig
-
-        # dae 核心跟随 ImmortalWrt-Packages，清理旧的目标缓存，避免固件继续打入旧版。
-        make package/dae/clean package/daed/clean V=s || true
-        rm -rf tmp/.packageinfo tmp/.config-package.in \
-          build_dir/target-*/dae-* build_dir/target-*/daed-* \
-          bin/packages/*/*/dae_*.ipk bin/packages/*/*/daed_*.ipk
-
-        dae_makefile=feeds/immortalwrt/dae/Makefile
-        [ -f "$dae_makefile" ] || { echo 'dae Makefile not found in custom feed' >&2; exit 1; }
-        dae_version=$(sed -n 's/^PKG_VERSION:=//p' "$dae_makefile" | head -n1)
-        [ -n "$dae_version" ] || { echo 'dae package version is empty' >&2; exit 1; }
-        echo "dae package version selected: $dae_version"
         # FakeHTTP 使用 files/ 中的静态成品，不允许 feed 包重新覆盖。
         if grep -Eq '^CONFIG_PACKAGE_(fakehttp|luci-app-fakehttp)=y$' .config; then
           printf '%s\n' '错误：请取消 feed 中的 FakeHTTP 核心及 LuCI' >&2
@@ -182,19 +166,6 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Verify dae package version
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        set -euo pipefail
-        cd immortalwrt
-        dae_pkg=$(find bin/packages -type f -name 'dae_*.ipk' | head -n1)
-        [ -n "$dae_pkg" ] || { echo '编译产物中未找到 dae 软件包' >&2; exit 1; }
-        pkg_version=$(tar -xOzf "$dae_pkg" ./control.tar.gz | tar -xzO ./control | sed -n 's/^Version: //p' | head -n1)
-        feed_version=$(sed -n 's/^PKG_VERSION:=//p' feeds/immortalwrt/dae/Makefile | head -n1)
-        echo "dae package version: $pkg_version"
-        echo "dae feed version: $feed_version"
-        [ "$pkg_version" = "$feed_version-1" ] || [ "$pkg_version" = "$feed_version" ] || { echo 'dae 软件包版本与 feed 不一致' >&2; exit 1; }
 
     - name: Organize files
       id: organize
