@@ -1,16 +1,9 @@
-# 代码
 name: ImmortalWrt Builder
 
-
 on:
-
   repository_dispatch:
     types: [fakehttp-update]
   workflow_dispatch:
-
-permissions:
-  contents: write
-  actions: write
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -19,12 +12,10 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
-# 防止手动和定时同时构建；不打断已经开始的编译。
 concurrency:
   group: immortalwrt-builder
   cancel-in-progress: false
@@ -32,6 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 360
     permissions:
       contents: write
       actions: write
@@ -43,12 +35,7 @@ jobs:
     - name: Free Disk Space (Ubuntu)
       uses: jlumbroso/free-disk-space@main
       with:
-        # this might remove tools that are actually needed,
-        # if set to "true" but frees about 6 GB
         tool-cache: true
-        
-        # all of these default to true, but feel free to set to
-        # "false" if necessary for your workflow
         android: true
         dotnet: true
         haskell: true
@@ -61,7 +48,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install build-essential clang llvm nodejs npm flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget qemu-utils
+        sudo -E apt-get -qq install build-essential clang llvm nodejs npm flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zip zlib1g-dev file wget qemu-utils
         sudo npm install -g pnpm
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -73,7 +60,7 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH immortalwrt
         ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
     - name: Load custom feeds
@@ -86,18 +73,18 @@ jobs:
     - name: Update feeds
       run: cd immortalwrt && ./scripts/feeds update -a
 
-    # dae/daed 同名冲突处置：官方 packages feed 亦提供同名 dae/daed。
-    # 若二者并存，feeds install 会优先采用官方包，导致 fork 中 dae/daed
-    # （2026.09.24 引擎）被遮蔽。此处移除官方同名包并刷新索引，使
-    # ImmortalWrt-Packages（diy-part1 追加的自定义源）成为唯一提供者，
-    # 后续 feeds install 即会正确链接到 fork 版本。
+    # 官方 packages feed 也有同名 dae/daed，并存时 feeds install 会优先采用官方包，
+    # 遮蔽 ImmortalWrt-Packages 里的 fork 版本。移除官方包并刷新索引后重建。
     - name: Prefer local openwrt-daede packages
       run: |
         set -e
         cd immortalwrt
         rm -rf feeds/packages/net/dae feeds/packages/net/daed
         rm -f feeds/immortalwrt.index
-        ls feeds/packages/net/ | grep -E '^dae|^daed' || echo '官方同名包已移除，仅保留 fork 版本'
+        if ls feeds/packages/net/ | grep -qE '^(dae|daed)$'; then
+          printf '%s\n' '错误：官方同名 dae/daed 仍然存在，fork 版本会被遮蔽' >&2
+          exit 1
+        fi
 
     - name: Install feeds
       run: cd immortalwrt && ./scripts/feeds install -a
@@ -115,7 +102,6 @@ jobs:
         echo "PACKAGE_FEED_COMMIT=$commit" >> "$GITHUB_ENV"
         echo "Packages feed commit: $commit"
        
-    # 版本查询留在工作流，下载脚本只负责下载、解压和生成启动文件。
     - name: Get FakeHTTP release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,7 +130,6 @@ jobs:
         curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh
         bash add_turboacc.sh --no-sfe        
         make defconfig
-        # FakeHTTP 使用 files/ 中的静态成品，不允许 feed 包重新覆盖。
         if grep -Eq '^CONFIG_PACKAGE_(fakehttp|luci-app-fakehttp)=y$' .config; then
           printf '%s\n' '错误：请取消 feed 中的 FakeHTTP 核心及 LuCI' >&2
           exit 1
@@ -160,23 +145,16 @@ jobs:
         cd immortalwrt
         echo -e "$(nproc) thread compile"
 
-        make -j$(nproc) || make -j1 V=s
+        make -j$(nproc) || make -j1 || make -j1 V=s
 
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | head -n 1 > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Check space usage
-      if: steps.compile.outputs.status == 'success'
+      if: (!cancelled())
       run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: immortalwrt/bin
 
     - name: Organize files
       id: organize
@@ -194,49 +172,20 @@ jobs:
         set -e
         cd immortalwrt/bin/targets/*/*
         
-        # 1. 查找 EFI 镜像
         IMG_GZ=$(ls *squashfs*combined-efi*.img.gz 2>/dev/null | head -n 1)
-        [ -z "$IMG_GZ" ] && echo "EFI combined image not found" && exit 1
+        [ -n "$IMG_GZ" ] || { echo "ERROR: EFI combined image not found" >&2; exit 1; }
 
-        # 2. 解压镜像
-        # 关键修改：使用 gzip -d -k (keep) 保留源文件，这样上传时 EFI 固件还在
-        # 加上 || true 忽略解压时的警告，防止脚本中断
-        echo "Decompressing $IMG_GZ ..."
-        gzip -d -k "$IMG_GZ" || true
-
+        gzip -dk "$IMG_GZ"
         IMG="${IMG_GZ%.gz}"
-        
-        # 检查解压是否真的成功（文件是否存在）
-        if [ ! -f "$IMG" ]; then
-          echo "ERROR: Decompression failed."
-          exit 1
-        fi
-        
+        [ -f "$IMG" ] || { echo "ERROR: decompression failed: $IMG_GZ" >&2; exit 1; }
+
         VMDK_NAME="${IMG%.img}-esxi.vmdk"
         FLAT_VMDK="${VMDK_NAME%.vmdk}-flat.vmdk"
 
-        # 3. 转换为 VMDK (monolithicFlat)
-        echo "Converting to ESXi VMDK..."
         qemu-img convert -f raw -O vmdk -o subformat=monolithicFlat "$IMG" "$VMDK_NAME"
-        
-        # 4. 修正 flat 文件名 (强校验)
-        if [ ! -f "$FLAT_VMDK" ]; then
-           echo "Warning: Flat file not found by expected name, checking directory..."
-           ls -lh *.vmdk
-           # 尝试找最大的 vmdk 文件
-           REAL_FLAT=$(find . -name "*.vmdk" -type f -size +100M | head -n 1)
-           if [ -n "$REAL_FLAT" ] && [ "$REAL_FLAT" != "./$VMDK_NAME" ]; then
-              mv "$REAL_FLAT" "$FLAT_VMDK"
-           else
-              echo "ERROR: ESXi flat vmdk generation failed"
-              exit 1
-           fi
-        fi
+        [ -f "$FLAT_VMDK" ] || { echo "ERROR: ESXi flat vmdk not generated" >&2; exit 1; }
 
-        # 5. 打包 VMDK
         zip -r "${VMDK_NAME}.zip" "$VMDK_NAME" "$FLAT_VMDK"
-        
-        # 6. 清理中间文件 (保留原始 .img.gz 用于上传)
         rm -f "$IMG" "$VMDK_NAME" "$FLAT_VMDK"
 
     - name: Cleanup firmware files
@@ -244,11 +193,6 @@ jobs:
       run: |
         cd immortalwrt/bin/targets/*/*
 
-        # 只保留以下文件：
-        # 1) squashfs-combined-efi.img.gz
-        # 2) squashfs-combined.img.gz
-        # 3) config.buildinfo
-        # 4) *-esxi.vmdk.zip
         for file in *; do
           [ -f "$file" ] || continue
           case "$file" in
@@ -379,9 +323,9 @@ jobs:
         body_path: release.txt
         files: ${{ env.FIRMWARE }}/*
 
-    # 只记录真正下载且随固件发布成功的资产，不在检查更新时提前写入。
     - name: Record successful FakeHTTP version
       if: success() && steps.release.outcome == 'success' && github.ref_name == github.event.repository.default_branch
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -409,6 +353,7 @@ jobs:
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
+      continue-on-error: true
       with:
         retain_days: 0
         keep_minimum_runs: 2
@@ -416,6 +361,7 @@ jobs:
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      continue-on-error: true
       with:
         keep_latest: 10
         delete_tags: true
@@ -424,6 +370,7 @@ jobs:
 
     - name: Bark notify
       if: always()
+      continue-on-error: true
       run: |
         STATUS="成功"
         if [ "${{ job.status }}" != "success" ]; then STATUS="失败"; fi
