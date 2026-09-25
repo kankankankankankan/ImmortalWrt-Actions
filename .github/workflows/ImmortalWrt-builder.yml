@@ -73,18 +73,18 @@ jobs:
     - name: Update feeds
       run: cd immortalwrt && ./scripts/feeds update -a
 
-    # 官方 packages feed 也有同名 dae/daed，并存时 feeds install 会优先采用官方包，
-    # 遮蔽 ImmortalWrt-Packages 里的 fork 版本。移除官方包并刷新索引后重建。
+    # 官方 packages feed 与 ImmortalWrt-Packages 同名提供 dae/daed。feeds install
+    # 按 feeds.conf 顺序取第一个命中者，而 diy-part1.sh 把自定义源追加到末尾，
+    # 所以不移除官方包就轮不到 fork 版本。删掉官方包目录后必须重建 packages 索引，
+    # 否则 install 会按旧索引造出悬空软链。切勿删 immortalwrt.index —— 删了它
+    # feeds install 会跳过整个自定义源，所有插件一个都不装且不报错。
     - name: Prefer local openwrt-daede packages
       run: |
         set -e
         cd immortalwrt
         rm -rf feeds/packages/net/dae feeds/packages/net/daed
-        rm -f feeds/immortalwrt.index
-        if ls feeds/packages/net/ | grep -qE '^(dae|daed)$'; then
-          printf '%s\n' '错误：官方同名 dae/daed 仍然存在，fork 版本会被遮蔽' >&2
-          exit 1
-        fi
+        ./scripts/feeds update -i packages
+        [ -e feeds/immortalwrt.index ] || { echo '错误：自定义源索引缺失' >&2; exit 1; }
 
     - name: Install feeds
       run: cd immortalwrt && ./scripts/feeds install -a
@@ -173,7 +173,7 @@ jobs:
         IMG_GZ=$(ls *squashfs*combined-efi*.img.gz 2>/dev/null | head -n 1)
         [ -n "$IMG_GZ" ] || { echo "ERROR: EFI combined image not found" >&2; exit 1; }
 
-        gzip -dk "$IMG_GZ"
+        gzip -dk "$IMG_GZ" || { [ $? -eq 2 ] || exit 1; }
         IMG="${IMG_GZ%.gz}"
         [ -f "$IMG" ] || { echo "ERROR: decompression failed: $IMG_GZ" >&2; exit 1; }
 
