@@ -86,6 +86,19 @@ jobs:
     - name: Update feeds
       run: cd immortalwrt && ./scripts/feeds update -a
 
+    # dae/daed 同名冲突处置：官方 packages feed 亦提供同名 dae/daed。
+    # 若二者并存，feeds install 会优先采用官方包，导致 fork 中 dae/daed
+    # （2026.09.24 引擎）被遮蔽。此处移除官方同名包并刷新索引，使
+    # ImmortalWrt-Packages（diy-part1 追加的自定义源）成为唯一提供者，
+    # 后续 feeds install 即会正确链接到 fork 版本。
+    - name: Prefer local openwrt-daede packages
+      run: |
+        set -e
+        cd immortalwrt
+        rm -rf feeds/packages/net/dae feeds/packages/net/daed
+        rm -f feeds/immortalwrt.index
+        ls feeds/packages/net/ | grep -E '^dae|^daed' || echo '官方同名包已移除，仅保留 fork 版本'
+
     - name: Install feeds
       run: cd immortalwrt && ./scripts/feeds install -a
 
