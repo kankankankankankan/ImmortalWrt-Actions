@@ -14,7 +14,7 @@ permissions:
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: v25.12.2 # 2026-09-23: FF-120 test branch targets latest ImmortalWrt 25.12 stable
+  REPO_BRANCH: v25.12.1
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -84,10 +84,18 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P1_SH
                     
     - name: Update feeds
-      run: cd immortalwrt && ./scripts/feeds update -a
+      run: |
+        cd immortalwrt && ./scripts/feeds update -a
+        rm -rf feeds/packages/net/dae && cp -r -f feeds/immortalwrt/openwrt-daede/dae feeds/packages/net/dae
+        rm -rf feeds/packages/net/daed && cp -r -f feeds/immortalwrt/openwrt-daede/daed feeds/packages/net/daed
+        rm -rf feeds/packages/net/mosdns && cp -r -f feeds/immortalwrt/mosdns feeds/packages/net/mosdns
+        rm -rf feeds/packages/net/sing-box && cp -r -f feeds/immortalwrt/sing-box feeds/packages/net/sing-box
 
     - name: Install feeds
-      run: cd immortalwrt && ./scripts/feeds install -a
+      run: |
+        cd immortalwrt && ./scripts/feeds install -a
+        rm -rf feeds/packages/lang/golang
+        git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
 
     - name: Record ImmortalWrt-Packages revision
       id: packages_revision
@@ -147,7 +155,7 @@ jobs:
         cd immortalwrt
         echo -e "$(nproc) thread compile"
 
-        make -j$(nproc) || make -j1 V=s
+        make -j$(nproc) || make -j1 || make -j1 V=s
 
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
@@ -358,7 +366,7 @@ jobs:
     - name: Upload firmware to release
       id: release
       uses: softprops/action-gh-release@master
-      if: success() && steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -369,6 +377,7 @@ jobs:
     # 只记录真正下载且随固件发布成功的资产，不在检查更新时提前写入。
     - name: Record successful FakeHTTP version
       if: success() && steps.release.outcome == 'success' && github.ref_name == github.event.repository.default_branch
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -396,6 +405,7 @@ jobs:
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
+      continue-on-error: true
       with:
         retain_days: 0
         keep_minimum_runs: 2
@@ -403,6 +413,7 @@ jobs:
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      continue-on-error: true
       with:
         keep_latest: 10
         delete_tags: true
@@ -411,6 +422,7 @@ jobs:
 
     - name: Bark notify
       if: always()
+      continue-on-error: true
       run: |
         STATUS="成功"
         if [ "${{ job.status }}" != "success" ]; then STATUS="失败"; fi
