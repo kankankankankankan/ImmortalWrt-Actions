@@ -139,6 +139,11 @@ jobs:
         curl -sSL https://raw.githubusercontent.com/chenmozhijin/turboacc/luci/add_turboacc.sh -o add_turboacc.sh
         bash add_turboacc.sh --no-sfe        
         make defconfig
+        # vmlinux-btf 调用的 pahole 来自 tools/dwarves，而 tools/Makefile 只在
+        # CONFIG_DWARVES 或 CONFIG_BUILD_ALL_HOST_TOOLS 为 y 时才编它。该符号的
+        # prompt 受 TOOLCHAINOPTS 限制，make defconfig 会丢弃预先写入的值，所以只能
+        # 在 defconfig 之后追加。后续 make 走 conf --oldconfig（保留现值），不会被抹掉。
+        echo 'CONFIG_DWARVES=y' >> .config
         # FakeHTTP 使用 files/ 中的静态成品，不允许 feed 包重新覆盖。
         if grep -Eq '^CONFIG_PACKAGE_(fakehttp|luci-app-fakehttp)=y$' .config; then
           printf '%s\n' '错误：请取消 feed 中的 FakeHTTP 核心及 LuCI' >&2
