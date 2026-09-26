@@ -90,6 +90,7 @@ jobs:
         rm -rf feeds/packages/net/daed && cp -r -f feeds/immortalwrt/openwrt-daede/daed feeds/packages/net/daed
         rm -rf feeds/packages/net/mosdns && cp -r -f feeds/immortalwrt/mosdns feeds/packages/net/mosdns
         rm -rf feeds/packages/net/sing-box && cp -r -f feeds/immortalwrt/sing-box feeds/packages/net/sing-box
+        rm -rf feeds/luci/applications/luci-app-tailscale-community && cp -r -f feeds/immortalwrt/luci-app-tailscale-community feeds/luci/applications/luci-app-tailscale-community
 
     - name: Install feeds
       run: |
