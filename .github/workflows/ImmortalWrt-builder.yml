@@ -1,10 +1,13 @@
-name: ImmortalWrt Builder
+name: ImmortalWrt Builder 24
 
 on:
   repository_dispatch:
     types: [fakehttp-update]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: write
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: v24.10.6
@@ -12,9 +15,13 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
+  CCACHE_DIR: /workdir/immortalwrt/.ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPILERCHECK: content
 
 concurrency:
   group: immortalwrt-builder
@@ -22,8 +29,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: write
@@ -48,7 +54,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install build-essential clang llvm nodejs npm flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zip zlib1g-dev file wget qemu-utils
+        sudo -E apt-get -qq install build-essential ccache clang llvm nodejs npm flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget qemu-utils
         sudo npm install -g pnpm
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -57,11 +63,25 @@ jobs:
         sudo chown $USER:$GROUPS /workdir
         
     - name: Clone source code
+      id: source
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH immortalwrt
+        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
         ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
+        echo "commit=$(git -C immortalwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+    # 只缓存编译器结果，不缓存源码、feeds 或整个构建目录。
+    - name: Restore ccache
+      id: ccache_restore
+      uses: actions/cache/restore@v4
+      continue-on-error: true
+      with:
+        path: /workdir/immortalwrt/.ccache
+        key: immortalwrt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ steps.source.outputs.commit }}-${{ hashFiles('feeds.conf.default', 'diy-part1.sh', 'diy-part2.sh', '.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          immortalwrt-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ steps.source.outputs.commit }}-
+
 
     - name: Load custom feeds
       run: |
@@ -71,23 +91,20 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P1_SH
                     
     - name: Update feeds
-      run: cd immortalwrt && ./scripts/feeds update -a
-
-    # 官方 packages feed 与 ImmortalWrt-Packages 同名提供 dae/daed。feeds install
-    # 按 feeds.conf 顺序取第一个命中者，而 diy-part1.sh 把自定义源追加到末尾，
-    # 所以不移除官方包就轮不到 fork 版本。删掉官方包目录后必须重建 packages 索引，
-    # 否则 install 会按旧索引造出悬空软链。切勿删 immortalwrt.index —— 删了它
-    # feeds install 会跳过整个自定义源，所有插件一个都不装且不报错。
-    - name: Prefer local openwrt-daede packages
       run: |
-        set -e
-        cd immortalwrt
-        rm -rf feeds/packages/net/dae feeds/packages/net/daed
-        ./scripts/feeds update -i packages
-        [ -e feeds/immortalwrt.index ] || { echo '错误：自定义源索引缺失' >&2; exit 1; }
+        cd immortalwrt && ./scripts/feeds update -a
+        rm -rf feeds/packages/net/dae && cp -r -f feeds/immortalwrt/openwrt-daede/dae feeds/packages/net/dae
+        rm -rf feeds/packages/net/daed && cp -r -f feeds/immortalwrt/openwrt-daede/daed feeds/packages/net/daed
+        rm -rf feeds/packages/net/mosdns && cp -r -f feeds/immortalwrt/mosdns feeds/packages/net/mosdns
+        rm -rf feeds/packages/net/sing-box && cp -r -f feeds/immortalwrt/sing-box feeds/packages/net/sing-box
+
 
     - name: Install feeds
-      run: cd immortalwrt && ./scripts/feeds install -a
+      run: |
+        cd immortalwrt && ./scripts/feeds install -a
+        rm -rf feeds/packages/lang/golang
+        git clone https://github.com/sbwml/packages_lang_golang -b 26.x feeds/packages/lang/golang
+
 
     - name: Record ImmortalWrt-Packages revision
       id: packages_revision
@@ -122,6 +139,11 @@ jobs:
         chmod +x $DIY_P2_SH
         cd immortalwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+        sed -i '/^CONFIG_CCACHE=/d; /^CONFIG_CCACHE_DIR=/d' .config
+        printf 'CONFIG_CCACHE=y\nCONFIG_CCACHE_DIR="%s/.ccache"\n' "/workdir/immortalwrt" >> .config
+        mkdir -p .ccache
+        ccache --max-size=2G
+        ccache --zero-stats
 
     - name: Download package
       id: package
@@ -145,14 +167,44 @@ jobs:
         cd immortalwrt
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | head -n 1 > DEVICE_NAME
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
+    - name: Report and trim ccache
+      id: ccache_bound
+      if: success() && steps.compile.outputs.status == 'success'
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        cd immortalwrt
+        cache_bin="$PWD/staging_dir/host/bin/ccache"
+        [ -x "$cache_bin" ] || cache_bin=ccache
+        "$cache_bin" --max-size=2G
+        "$cache_bin" --cleanup
+        "$cache_bin" --show-stats
+        test -d "$CCACHE_DIR"
+        echo 'save=true' >> "$GITHUB_OUTPUT"
+
+    - name: Save ccache
+      if: steps.ccache_bound.outputs.save == 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: /workdir/immortalwrt/.ccache
+        key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
     - name: Check space usage
-      if: (!cancelled())
+      if: steps.compile.outputs.status == 'success'
       run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: immortalwrt/bin
 
     - name: Organize files
       id: organize
@@ -170,20 +222,49 @@ jobs:
         set -e
         cd immortalwrt/bin/targets/*/*
         
+        # 1. 查找 EFI 镜像
         IMG_GZ=$(ls *squashfs*combined-efi*.img.gz 2>/dev/null | head -n 1)
-        [ -n "$IMG_GZ" ] || { echo "ERROR: EFI combined image not found" >&2; exit 1; }
+        [ -z "$IMG_GZ" ] && echo "EFI combined image not found" && exit 1
 
-        gzip -dk "$IMG_GZ" || { [ $? -eq 2 ] || exit 1; }
+        # 2. 解压镜像
+        # 关键修改：使用 gzip -d -k (keep) 保留源文件，这样上传时 EFI 固件还在
+        # 加上 || true 忽略解压时的警告，防止脚本中断
+        echo "Decompressing $IMG_GZ ..."
+        gzip -d -k "$IMG_GZ" || true
+
         IMG="${IMG_GZ%.gz}"
-        [ -f "$IMG" ] || { echo "ERROR: decompression failed: $IMG_GZ" >&2; exit 1; }
-
+        
+        # 检查解压是否真的成功（文件是否存在）
+        if [ ! -f "$IMG" ]; then
+          echo "ERROR: Decompression failed."
+          exit 1
+        fi
+        
         VMDK_NAME="${IMG%.img}-esxi.vmdk"
         FLAT_VMDK="${VMDK_NAME%.vmdk}-flat.vmdk"
 
+        # 3. 转换为 VMDK (monolithicFlat)
+        echo "Converting to ESXi VMDK..."
         qemu-img convert -f raw -O vmdk -o subformat=monolithicFlat "$IMG" "$VMDK_NAME"
-        [ -f "$FLAT_VMDK" ] || { echo "ERROR: ESXi flat vmdk not generated" >&2; exit 1; }
+        
+        # 4. 修正 flat 文件名 (强校验)
+        if [ ! -f "$FLAT_VMDK" ]; then
+           echo "Warning: Flat file not found by expected name, checking directory..."
+           ls -lh *.vmdk
+           # 尝试找最大的 vmdk 文件
+           REAL_FLAT=$(find . -name "*.vmdk" -type f -size +100M | head -n 1)
+           if [ -n "$REAL_FLAT" ] && [ "$REAL_FLAT" != "./$VMDK_NAME" ]; then
+              mv "$REAL_FLAT" "$FLAT_VMDK"
+           else
+              echo "ERROR: ESXi flat vmdk generation failed"
+              exit 1
+           fi
+        fi
 
+        # 5. 打包 VMDK
         zip -r "${VMDK_NAME}.zip" "$VMDK_NAME" "$FLAT_VMDK"
+        
+        # 6. 清理中间文件 (保留原始 .img.gz 用于上传)
         rm -f "$IMG" "$VMDK_NAME" "$FLAT_VMDK"
 
     - name: Cleanup firmware files
@@ -313,7 +394,7 @@ jobs:
     - name: Upload firmware to release
       id: release
       uses: softprops/action-gh-release@master
-      if: success() && steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success'
+      if: steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success' && !cancelled()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
